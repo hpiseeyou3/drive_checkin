@@ -162,7 +162,9 @@ const main = async () => {
     // 反序列化字符串为 Map 对象
     try{
       CookiesMap = new Map(JSON.parse(readSerializedMap));
-    }catch(e){}
+    }catch(e){
+      console.error(e)
+    }
   }
 
   for (let p = 0; p < accounts_group.length; p++) {
@@ -195,11 +197,12 @@ const main = async () => {
           cloudClient._setLogin(userName, password)
           await cloudClient.login();
           CookiesMap.set(userName, cloudClient.getCookieMap())
-          gg+=` 失效重新登录`                   
+          gg+=` 失效重新登录`           
         }else{
           gg+=` 并且有效`          
         }
         logger.log(gg)
+
         let { cloudCapacityInfo: cloudCapacityInfo0, familyCapacityInfo: familyCapacityInfo0 } = await cloudClient.getUserSizeInfo();
 
         const result = await doTask(cloudClient);
@@ -216,6 +219,7 @@ const main = async () => {
         //重新获取主账号的空间信息
         cloudClient.setCookieMap(CookiesMap.get(firstUserName))
         const { familyCapacityInfo } = await cloudClient.getUserSizeInfo();
+        
 
         logger.log(
           `${firstSpace}实际：个人容量+ ${(cloudCapacityInfo2.totalSize - cloudCapacityInfo0.totalSize) / 1024 / 1024}M, 家庭容量+ ${(familyCapacityInfo.totalSize - familyCapacitySize2) / 1024 / 1024}M`
@@ -225,11 +229,12 @@ const main = async () => {
         );
         familyCapacitySize2 = familyCapacityInfo.totalSize
 
-
       } catch (e) {
         logger.error(e);
         if (e.code === "ETIMEDOUT") throw e;
       } finally {
+        //打扫cookie
+        cloudClient.cleanCookie()
         logger.log("");
       }
 
@@ -248,6 +253,10 @@ const main = async () => {
 
 (async () => {
   try {
+    if(env.tyys == "") {
+      logger.error("没有设置tyys环境变量")
+      return
+    }
     await main();
   } finally {
     logger.log("\n\n");
