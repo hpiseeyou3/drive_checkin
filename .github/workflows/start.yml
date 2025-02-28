@@ -19,6 +19,13 @@ jobs:
             
         - name: 获取本仓库源码
           uses: actions/checkout@main
+
+        - name: Cache Cookies
+          id: cache-primes
+          uses: actions/cache@v4
+          with:
+            path: tyys_cookies.json
+            key: ${{ runner.os }}-by_zhlhlf
           
         - name: 安装node.js环境
           uses: actions/setup-node@main
@@ -30,14 +37,9 @@ jobs:
           with:
             secrets_json: ${{ toJSON(secrets) }}
           
-        - name: 安装module模块
+        - name: 执行
           run: |  
             npm install >/dev/null 2>&1
+            npm start
 
-        - name: 执行
-          uses: nick-fields/retry@master
-          with:
-            timeout_minutes: 30
-            max_attempts: 3
-            command: npm start
               

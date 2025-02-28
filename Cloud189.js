@@ -4,7 +4,9 @@ require("dotenv").config();
 const log4js = require("log4js");
 const recording = require("log4js/lib/appenders/recording");
 const superagent = require("superagent");
-const { CloudClient } = require("cloud189-sdk");
+const CloudClient = require("./CloudClient");
+const fs = require('fs');
+const path = require('path');
 const env = require("./env");
 
 log4js.configure({
@@ -39,7 +41,6 @@ const doTask = async (cloudClient) => {
             getSpace.push(` ${res1.netdiskBonus}`);
           }
         } catch (e) {
-          getSpace.push(` 0`);
         }
       })());
     }
@@ -49,32 +50,29 @@ const doTask = async (cloudClient) => {
   }
 
   const signPromises2 = [];
-  getSpace = [`${firstSpace}签到家庭云获得(M)`];
+  getSpace = [`${firstSpace}获得(M)`];
   const { familyInfoResp } = await cloudClient.getFamilyList();
   if (familyInfoResp) {
-    const family = familyInfoResp.find((f) => f.familyId == FAMILY_ID);
-    if (family) {
-      result.push(`${firstSpace}开始签到家庭云 ID: ${family.familyId}`);
-      for (let m = 0; m < family_threadx; m++) {
-        signPromises2.push((async () => {
-          try {
-            const res = await cloudClient.familyUserSign(family.familyId);
-            if (!res.signStatus) {
-              getSpace.push(` ${res.bonusSpace}`);
-            }
-          } catch (e) {
-            getSpace.push(` 0`);
+    const family = familyInfoResp.find((f) => f.familyId == FAMILY_ID) || familyInfoResp[0];
+    result.push(`${firstSpace}开始签到家庭云 ID: ${family.familyId}`);
+    for (let i = 0; i < family_threadx; i++) {
+      signPromises2.push((async () => {
+        try {
+          const res = await cloudClient.familyUserSign(family.familyId);
+          if (!res.signStatus) {
+            getSpace.push(` ${res.bonusSpace}`);
           }
-        })());
-      }
-      await Promise.all(signPromises2);
-      if (getSpace.length == 1) getSpace.push(" 0");
-      result.push(getSpace.join(""));
+        } catch (e) {
+          getSpace.push(` 0`);
+        }
+      })());
     }
+    await Promise.all(signPromises2);
+    if(getSpace.length == 1) getSpace.push(" 0");
+    result.push(getSpace.join(""));
   }
   return result;
 };
-
 
 const pushTelegramBot = (title, desp) => {
   if (!(telegramBotToken && telegramBotId)) {
@@ -90,7 +88,7 @@ const pushTelegramBot = (title, desp) => {
     .timeout(3000)
     .end((err, res) => {
       if (err) {
-        logger.error(`TelegramBot推送失败:${JSON.stringify(err)}`);
+        logger.error(`TelegramBot推送失败:${err}`);
         return;
       }
       const json = JSON.parse(res.text);
@@ -148,45 +146,86 @@ let telegramBotId = env.TELEGRAM_CHAT_ID
 
 let private_threadx = env.private_threadx; //进程数
 let family_threadx = env.family_threadx; //进程数
+let filePath = path.join(__dirname, 'tyys_cookies.json'); // cookie保存文件路径
 let i
+
+//用来存储cookies
+let CookiesMap = new Map();
+let cloudClient = new CloudClient()
+let userNameInfo;
 
 const main = async () => {
   let accounts
 
+  if(fs.existsSync(filePath)){
+    const readSerializedMap = fs.readFileSync(filePath, 'utf-8'); // 读取文件内容
+    // 反序列化字符串为 Map 对象
+    try{
+      CookiesMap = new Map(JSON.parse(readSerializedMap));
+    }catch(e){}
+  }
+
   for (let p = 0; p < accounts_group.length; p++) {
     accounts = accounts_group[p].trim().split(/[\n ]+/);
 
-    let userName0, password0, familyCapacitySize;
+    let familyCapacitySize, familyCapacitySize2, firstUserName;
     FAMILY_ID = accounts[0]
 
     for (i = 1; i < accounts.length; i += 2) {
       const [userName, password] = accounts.slice(i, i + 2);
       if (!userName || !password) continue;
 
-      const userNameInfo = mask(userName, 3, 7);
+      userNameInfo = mask(userName, 3, 7);
 
       try {
-        const cloudClient = new CloudClient(userName, password);
 
         logger.log(`${(i - 1) / 2 + 1}.账户 ${userNameInfo} 开始执行`);
-        await cloudClient.login();
-        const { cloudCapacityInfo: cloudCapacityInfo0, familyCapacityInfo: familyCapacityInfo0 } = await cloudClient.getUserSizeInfo();
-        const result = await doTask(cloudClient);
 
-        if (i == 1) {
-          userName0 = userName;
-          password0 = password;
-          familyCapacitySize = familyCapacityInfo0.totalSize;
+        let gg=`${firstSpace}`
+        
+        if(CookiesMap.has(userName)){
+          cloudClient.setCookieMap(CookiesMap.get(userName))
+          gg+=`本地有储存此账号cookie`
+        }else{
+          gg+=`本地没有储存此账号cookie`          
         }
-        const { cloudCapacityInfo, familyCapacityInfo } = await cloudClient.getUserSizeInfo();
+
+        let cookie_is_believe = await cloudClient.cookie_is_believe()
+        if(!cookie_is_believe){
+          cloudClient._setLogin(userName, password)
+          await cloudClient.login();
+          CookiesMap.set(userName, cloudClient.getCookieMap())
+          gg+=` 失效重新登录`                   
+        }else{
+          gg+=` 并且有效`          
+        }
+        logger.log(gg)
+        let { cloudCapacityInfo: cloudCapacityInfo0, familyCapacityInfo: familyCapacityInfo0 } = await cloudClient.getUserSizeInfo();
+
+        const result = await doTask(cloudClient);
         result.forEach((r) => logger.log(r));
 
+        let { cloudCapacityInfo: cloudCapacityInfo2 , familyCapacityInfo: familyCapacityInfo2 } = await cloudClient.getUserSizeInfo();
+
+        if (i == 1) {
+          firstUserName = userName
+          familyCapacitySize = familyCapacityInfo0.totalSize
+          familyCapacitySize2 = familyCapacitySize
+        }
+
+        //重新获取主账号的空间信息
+        cloudClient.setCookieMap(CookiesMap.get(firstUserName))
+        const { familyCapacityInfo } = await cloudClient.getUserSizeInfo();
+
         logger.log(
-          `${firstSpace}实际：个人容量+ ${(cloudCapacityInfo.totalSize - cloudCapacityInfo0.totalSize) / 1024 / 1024}M, 家庭容量+ ${(familyCapacityInfo.totalSize - familyCapacityInfo0.totalSize) / 1024 / 1024}M`
+          `${firstSpace}实际：个人容量+ ${(cloudCapacityInfo2.totalSize - cloudCapacityInfo0.totalSize) / 1024 / 1024}M, 家庭容量+ ${(familyCapacityInfo.totalSize - familyCapacitySize2) / 1024 / 1024}M`
         );
         logger.log(
-          `${firstSpace}个人总容量：${(cloudCapacityInfo.totalSize / 1024 / 1024 / 1024).toFixed(2)}G, 家庭总容量：${(familyCapacityInfo.totalSize / 1024 / 1024 / 1024).toFixed(2)}G`
+          `${firstSpace}个人总容量：${(cloudCapacityInfo2.totalSize / 1024 / 1024 / 1024).toFixed(2)}G, 家庭总容量：${(familyCapacityInfo2.totalSize / 1024 / 1024 / 1024).toFixed(2)}G`
         );
+        familyCapacitySize2 = familyCapacityInfo.totalSize
+
+
       } catch (e) {
         logger.error(e);
         if (e.code === "ETIMEDOUT") throw e;
@@ -195,21 +234,15 @@ const main = async () => {
       }
 
     }
-
-    try {
-      const cloudClient = new CloudClient(userName0, password0);
-      await cloudClient.login();
-      const userNameInfo = mask(userName0, 3, 7);
-      const { familyCapacityInfo: finalfamilyCapacityInfo } = await cloudClient.getUserSizeInfo();
-
-      const capacityChange = finalfamilyCapacityInfo.totalSize - familyCapacitySize;
-      logger.log(`主账号${userNameInfo} 家庭容量+ ${capacityChange / 1024 / 1024}M`);
-      logger.log("");
-    } catch (e) {
-
-    }
+    userNameInfo = mask(firstUserName, 3, 7);
+    const capacityChange = familyCapacitySize2 - familyCapacitySize;
+    logger.log(`主账号${userNameInfo} 家庭容量+ ${capacityChange / 1024 / 1024}M`);
+    logger.log("");
 
   }
+  
+  const serializedMap = JSON.stringify(Array.from(CookiesMap),null, 2);
+  fs.writeFileSync(filePath, serializedMap, 'utf-8'); // 写入文件
 
 };
 
