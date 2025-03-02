@@ -3,10 +3,11 @@ name: Action
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: 20 16 * * *
-
-
+    inputs:
+      reason:
+        description: '触发原因'
+        required: true
+        default: '手动执行'
 jobs:
     build:
       runs-on: ubuntu-20.04
